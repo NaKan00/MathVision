@@ -5,12 +5,12 @@
 ```bash
 git clone https://github.com/NaKan00/MathVision.git
 cd MathVision 
+``` 
 
 ## 2. Создание виртуального окружения
 
 python3 -m venv .venv
 source .venv/bin/activate
-
 
 python -m venv .venv
 .venv\Scripts\activate
