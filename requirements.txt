@@ -1,0 +1,8 @@
+torch
+torchvision
+torchaudio
+pillow
+tqdm
+pandas
+sacrebleu
+pyyaml
