@@ -22,9 +22,9 @@ class ConvNeXtEncoder(nn.Module):
         else:
             m = convnext_small(weights="DEFAULT" if pretrained else None)
 
-        self.features = m.features  # [B, C, H', W']
+        self.features = m.features  
 
-        # узнаём число каналов C на выходе
+       
         with torch.no_grad():
             dummy = torch.zeros(1, 3, 64, 256)
             c_out = self.features(dummy).shape[1]

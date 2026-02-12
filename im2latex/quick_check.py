@@ -15,6 +15,6 @@ ds = Im2LatexDataset(TRAIN, IMAGES, tok, build_image_transform(64))
 dl = DataLoader(ds, batch_size=4, shuffle=True, collate_fn=lambda b: collate_batch(b, tok.vocab.pad))
 
 x, y = next(iter(dl))
-print("x:", x.shape)   # [B,1,64,maxW]
-print("y:", y.shape)   # [B,maxL]
+print("x:", x.shape)  
+print("y:", y.shape)   
 print("sample decode:", tok.decode(y[0].tolist()))
