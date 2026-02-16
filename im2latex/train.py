@@ -81,7 +81,7 @@ def main():
     height = 64
     max_width = 384
     max_len = 256
-    num_epochs = 5
+    num_epochs = 10
     save_every_steps = 500
 
     # tokenizer по train
@@ -103,9 +103,25 @@ def main():
     opt = torch.optim.AdamW(model.parameters(), lr=3e-4)
     loss_fn = torch.nn.CrossEntropyLoss(ignore_index=tok.vocab.pad)
 
+    # --- RESUME ---
+    resume_path = OUT_DIR / "last.pt"
+    start_epoch = 1
     global_step = 0
 
-    for epoch in range(1, num_epochs + 1):
+    if resume_path.exists():
+        ckpt = torch.load(resume_path, map_location=device)
+        model.load_state_dict(ckpt["model_state"])
+        opt.load_state_dict(ckpt["opt_state"])
+
+        # В last.pt сохранены epoch и step
+        start_epoch = int(ckpt.get("epoch", 1))
+        global_step = int(ckpt.get("step", 0))
+
+        print(f"Resuming from {resume_path}: epoch={start_epoch}, step={global_step}")
+    # --- /RESUME ---
+
+
+    for epoch in range(start_epoch, num_epochs + 1):
         model.train()
         pbar = tqdm(train_dl, desc=f"train e{epoch}", leave=True)
 
