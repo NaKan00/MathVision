@@ -17,7 +17,6 @@ class PositionalEncoding(nn.Module):
         self.register_buffer("pe", pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [T, B, D]
         x = x + self.pe[: x.size(0)]
         return self.dropout(x)
 
@@ -30,7 +29,7 @@ class TransformerDecoder(nn.Module):
         nhead: int = 8,
         num_layers: int = 4,
         dim_ff: int = 1024,
-        dropout: float = 0.1,
+        dropout: float = 0.2,   # чуть выше, чем было
         pad_id: int = 0,
     ):
         super().__init__()
@@ -38,6 +37,7 @@ class TransformerDecoder(nn.Module):
         self.d_model = d_model
 
         self.emb = nn.Embedding(vocab_size, d_model, padding_idx=pad_id)
+        self.emb_drop = nn.Dropout(dropout)
         self.pos = PositionalEncoding(d_model, dropout=dropout)
 
         layer = nn.TransformerDecoderLayer(
@@ -45,28 +45,31 @@ class TransformerDecoder(nn.Module):
             nhead=nhead,
             dim_feedforward=dim_ff,
             dropout=dropout,
+            activation="gelu",
             batch_first=False,
+            norm_first=True,   # важная стабилизация
         )
         self.dec = nn.TransformerDecoder(layer, num_layers=num_layers)
         self.out = nn.Linear(d_model, vocab_size)
 
     @staticmethod
     def causal_mask(T: int, device) -> torch.Tensor:
-        # [T, T] True = запрещено смотреть
         return torch.triu(torch.ones(T, T, device=device, dtype=torch.bool), diagonal=1)
 
     def forward(self, tgt_ids: torch.Tensor, memory: torch.Tensor) -> torch.Tensor:
         """
-        tgt_ids: [B, T]  (teacher forcing input)
+        tgt_ids: [B, T]
         memory:  [S, B, D]
-        returns logits: [B, T, V]
+        return:  [B, T, V]
         """
         B, T = tgt_ids.shape
-        tgt = self.emb(tgt_ids).transpose(0, 1) * math.sqrt(self.d_model)  # [T,B,D]
+        tgt = self.emb(tgt_ids) * math.sqrt(self.d_model)  # [B,T,D]
+        tgt = self.emb_drop(tgt)
+        tgt = tgt.transpose(0, 1)  # [T,B,D]
         tgt = self.pos(tgt)
 
-        tgt_mask = self.causal_mask(T, tgt.device)  # [T,T]
-        tgt_key_padding_mask = (tgt_ids == self.pad_id)  # [B,T]
+        tgt_mask = self.causal_mask(T, tgt.device)
+        tgt_key_padding_mask = (tgt_ids == self.pad_id)
 
         h = self.dec(
             tgt=tgt,
