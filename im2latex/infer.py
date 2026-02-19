@@ -24,8 +24,8 @@ def greedy_decode(
     model.eval()
     device = next(model.parameters()).device
 
-    memory = model.encoder(image_tensor.to(device))  # [S,1,D]
-    ys = torch.tensor([[bos_id]], dtype=torch.long, device=device)  # [1,1]
+    memory = model.encoder(image_tensor.to(device))
+    ys = torch.tensor([[bos_id]], dtype=torch.long, device=device)
 
     def block_repeated_ngrams(logits_row: torch.Tensor, seq: list[int], n: int):
         if n <= 0 or len(seq) < n:
@@ -41,13 +41,11 @@ def greedy_decode(
         return logits_row
 
     for _ in range(max_len):
-        logits = model.decoder(ys, memory)  # [1,T,V]
+        logits = model.decoder(ys, memory)
         next_logits = logits[0, -1].clone()
 
-        # запрещаем PAD в генерации
         next_logits[pad_id] = -1e9
 
-        # анти-повторы
         seq = ys[0].tolist()
         next_logits = block_repeated_ngrams(next_logits, seq, no_repeat_ngram)
 
@@ -78,10 +76,9 @@ def beam_search_decode(
     model.eval()
     device = next(model.parameters()).device
 
-    memory = model.encoder(image_tensor.to(device))  # [S,1,D]
+    memory = model.encoder(image_tensor.to(device))
 
     def score_with_lp(logp: float, length: int) -> float:
-        # длина включает BOS, поэтому max(1, length)
         lp = ((5 + max(1, length)) / 6) ** length_penalty
         return logp / lp
 
@@ -98,7 +95,6 @@ def beam_search_decode(
             logits_row.index_fill_(0, idx, -1e9)
         return logits_row
 
-    # beam = список (tokens, logp, finished)
     beams = [([bos_id], 0.0, False)]
 
     for _ in range(max_len):
@@ -109,8 +105,8 @@ def beam_search_decode(
                 all_candidates.append((tokens, logp, True))
                 continue
 
-            ys = torch.tensor([tokens], dtype=torch.long, device=device)  # [1,T]
-            logits = model.decoder(ys, memory)  # [1,T,V]
+            ys = torch.tensor([tokens], dtype=torch.long, device=device)
+            logits = model.decoder(ys, memory)
             next_logits = logits[0, -1].clone()
 
             next_logits[pad_id] = -1e9
@@ -125,15 +121,12 @@ def beam_search_decode(
                 new_finished = (next_id == eos_id)
                 all_candidates.append((new_tokens, new_logp, new_finished))
 
-        # отбор лучших по length penalty
         all_candidates.sort(key=lambda x: score_with_lp(x[1], len(x[0])), reverse=True)
         beams = all_candidates[:beam]
 
-        # если все закончились — выходим
         if all(b[2] for b in beams):
             break
 
-    # финальный выбор
     best_tokens, best_logp, _ = max(beams, key=lambda x: score_with_lp(x[1], len(x[0])))
     return best_tokens
 
@@ -158,14 +151,12 @@ def main():
     tok = load_tokenizer(ckpt_dir / "tokenizer.json")
     model = load_model(ckpt_dir / "last.pt", device=device)
 
-    # Пример: возьми любой png из датасета
     img_path = Path("datasets/im2latex/images/formula_images_processed") / "66667cee5b.png"
 
     tf = build_image_transform(height=64, max_width=384)
     img = Image.open(img_path)
-    x = tf(img).unsqueeze(0)  # [1,1,64,W]
+    x = tf(img).unsqueeze(0)
 
-    # ---- выбор режима декодинга ----
     use_beam = False
     if use_beam:
         ids = beam_search_decode(

@@ -74,17 +74,15 @@ def main():
     OUT_DIR = Path("checkpoints/im2latex_convnext")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # ---- параметры, которые стабильно работают на M4/16GB ----
-    encoder_variant = "small"  # можно "tiny" если хочется быстрее/стабильнее
+    encoder_variant = "small"
     d_model = 256
     batch_size = 4
     height = 64
     max_width = 384
     max_len = 256
-    num_epochs = 5
+    num_epochs = 10
     save_every_steps = 500
 
-    # tokenizer по train
     df = pd.read_csv(TRAIN)
     tok = Tokenizer.build(df["formula"].astype(str).tolist(), min_freq=2, max_size=8000)
     save_tokenizer(tok, OUT_DIR / "tokenizer.json")
@@ -103,9 +101,21 @@ def main():
     opt = torch.optim.AdamW(model.parameters(), lr=3e-4)
     loss_fn = torch.nn.CrossEntropyLoss(ignore_index=tok.vocab.pad)
 
+    resume_path = OUT_DIR / "last.pt"
+    start_epoch = 1
     global_step = 0
 
-    for epoch in range(1, num_epochs + 1):
+    if resume_path.exists():
+        ckpt = torch.load(resume_path, map_location=device)
+        model.load_state_dict(ckpt["model_state"])
+        opt.load_state_dict(ckpt["opt_state"])
+        start_epoch = ckpt["epoch"]
+        global_step = ckpt["step"]
+        print(f"Resuming from epoch={start_epoch}, step={global_step}")
+
+    global_step = 0
+
+    for epoch in range(start_epoch + 1, num_epochs + 1):
         model.train()
         pbar = tqdm(train_dl, desc=f"train e{epoch}", leave=True)
 

@@ -12,24 +12,24 @@ class Img2Latex(nn.Module):
         pad_id: int,
         d_model: int = 256,
         encoder_variant: str = "small",
-        encoder_pretrained: bool = False,  # было True
-        dropout: float = 0.3,              # добавили (регуляризация)
+        encoder_pretrained: bool = False,
+        dropout: float = 0.3,
     ):
         super().__init__()
         self.encoder = ConvNeXtEncoder(
             variant=encoder_variant,
             d_model=d_model,
             pretrained=encoder_pretrained,
-            dropout=0.1,                   # энкодеру достаточно слабого dropout
+            dropout=0.1,
         )
         self.decoder = TransformerDecoder(
             vocab_size=vocab_size,
             d_model=d_model,
             pad_id=pad_id,
-            dropout=dropout,               # прокинули dropout декодера
+            dropout=dropout,
         )
 
     def forward(self, images: torch.Tensor, tgt_inp: torch.Tensor) -> torch.Tensor:
-        memory = self.encoder(images)          # [S,B,D]
-        logits = self.decoder(tgt_inp, memory) # [B,T,V]
+        memory = self.encoder(images)
+        logits = self.decoder(tgt_inp, memory)
         return logits

@@ -13,7 +13,7 @@ class PositionalEncoding(nn.Module):
         div = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(pos * div)
         pe[:, 1::2] = torch.cos(pos * div)
-        pe = pe.unsqueeze(1)  # [max_len, 1, d_model]
+        pe = pe.unsqueeze(1)
         self.register_buffer("pe", pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -29,7 +29,7 @@ class TransformerDecoder(nn.Module):
         nhead: int = 8,
         num_layers: int = 4,
         dim_ff: int = 1024,
-        dropout: float = 0.2,   # чуть выше, чем было
+        dropout: float = 0.2,
         pad_id: int = 0,
     ):
         super().__init__()
@@ -47,7 +47,7 @@ class TransformerDecoder(nn.Module):
             dropout=dropout,
             activation="gelu",
             batch_first=False,
-            norm_first=True,   # важная стабилизация
+            norm_first=True,
         )
         self.dec = nn.TransformerDecoder(layer, num_layers=num_layers)
         self.out = nn.Linear(d_model, vocab_size)
@@ -63,9 +63,9 @@ class TransformerDecoder(nn.Module):
         return:  [B, T, V]
         """
         B, T = tgt_ids.shape
-        tgt = self.emb(tgt_ids) * math.sqrt(self.d_model)  # [B,T,D]
+        tgt = self.emb(tgt_ids) * math.sqrt(self.d_model)
         tgt = self.emb_drop(tgt)
-        tgt = tgt.transpose(0, 1)  # [T,B,D]
+        tgt = tgt.transpose(0, 1)
         tgt = self.pos(tgt)
 
         tgt_mask = self.causal_mask(T, tgt.device)
@@ -76,7 +76,7 @@ class TransformerDecoder(nn.Module):
             memory=memory,
             tgt_mask=tgt_mask,
             tgt_key_padding_mask=tgt_key_padding_mask,
-        )  # [T,B,D]
+        )
 
-        logits = self.out(h).transpose(0, 1)  # [B,T,V]
+        logits = self.out(h).transpose(0, 1)
         return logits
