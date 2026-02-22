@@ -9,126 +9,71 @@ from im2latex.utils import load_tokenizer
 
 
 @torch.no_grad()
-def greedy_decode(
+def beam_decode_single(
     model: Img2Latex,
-    image_tensor: torch.Tensor,
+    x_single: torch.Tensor,
     bos_id: int,
     eos_id: int,
     pad_id: int,
-    max_len: int = 256,
+    beam_size: int = 5,
+    max_len: int = 160,
+    length_penalty_alpha: float = 0.6,
     no_repeat_ngram: int = 3,
 ):
-    """
-    Greedy decoding + анти-повторы (no_repeat_ngram).
-    """
+    device = x_single.device
     model.eval()
-    device = next(model.parameters()).device
+    beams = [(torch.tensor([bos_id], device=device, dtype=torch.long), 0.0, False)]
 
-    memory = model.encoder(image_tensor.to(device))
-    ys = torch.tensor([[bos_id]], dtype=torch.long, device=device)
+    def lp(length: int) -> float:
+        return ((5.0 + length) / 6.0) ** length_penalty_alpha
 
-    def block_repeated_ngrams(logits_row: torch.Tensor, seq: list[int], n: int):
+    def block_repeated_ngrams(log_probs_row: torch.Tensor, seq: list[int], n: int):
         if n <= 0 or len(seq) < n:
-            return logits_row
+            return log_probs_row
         prefix = seq[-(n - 1) :]
         banned = set()
         for i in range(len(seq) - n + 1):
             if seq[i : i + (n - 1)] == prefix:
                 banned.add(seq[i + (n - 1)])
         if banned:
-            idx = torch.tensor(list(banned), device=logits_row.device, dtype=torch.long)
-            logits_row.index_fill_(0, idx, -1e9)
-        return logits_row
+            idx = torch.tensor(list(banned), device=log_probs_row.device, dtype=torch.long)
+            log_probs_row.index_fill_(0, idx, -1e9)
+        return log_probs_row
 
-    for _ in range(max_len):
-        logits = model.decoder(ys, memory)
-        next_logits = logits[0, -1].clone()
-
-        next_logits[pad_id] = -1e9
-
-        seq = ys[0].tolist()
-        next_logits = block_repeated_ngrams(next_logits, seq, no_repeat_ngram)
-
-        next_id = int(torch.argmax(next_logits, dim=-1).item())
-        ys = torch.cat([ys, torch.tensor([[next_id]], device=device)], dim=1)
-
-        if next_id == eos_id:
-            break
-
-    return ys[0].tolist()
-
-
-@torch.no_grad()
-def beam_search_decode(
-    model: Img2Latex,
-    image_tensor: torch.Tensor,
-    bos_id: int,
-    eos_id: int,
-    pad_id: int,
-    beam: int = 5,
-    max_len: int = 256,
-    length_penalty: float = 0.7,
-    no_repeat_ngram: int = 3,
-):
-    """
-    Beam search на 1 картинку. Возвращает лучший список токенов.
-    """
-    model.eval()
-    device = next(model.parameters()).device
-
-    memory = model.encoder(image_tensor.to(device))
-
-    def score_with_lp(logp: float, length: int) -> float:
-        lp = ((5 + max(1, length)) / 6) ** length_penalty
-        return logp / lp
-
-    def block_repeated_ngrams(logits_row: torch.Tensor, seq: list[int], n: int):
-        if n <= 0 or len(seq) < n:
-            return logits_row
-        prefix = seq[-(n - 1) :]
-        banned = set()
-        for i in range(len(seq) - n + 1):
-            if seq[i : i + (n - 1)] == prefix:
-                banned.add(seq[i + (n - 1)])
-        if banned:
-            idx = torch.tensor(list(banned), device=logits_row.device, dtype=torch.long)
-            logits_row.index_fill_(0, idx, -1e9)
-        return logits_row
-
-    beams = [([bos_id], 0.0, False)]
-
-    for _ in range(max_len):
-        all_candidates = []
-
-        for tokens, logp, finished in beams:
-            if finished:
-                all_candidates.append((tokens, logp, True))
-                continue
-
-            ys = torch.tensor([tokens], dtype=torch.long, device=device)
-            logits = model.decoder(ys, memory)
-            next_logits = logits[0, -1].clone()
-
-            next_logits[pad_id] = -1e9
-            next_logits = block_repeated_ngrams(next_logits, tokens, no_repeat_ngram)
-
-            probs = torch.log_softmax(next_logits, dim=-1)
-            topk = torch.topk(probs, k=beam)
-
-            for next_id, add_logp in zip(topk.indices.tolist(), topk.values.tolist()):
-                new_tokens = tokens + [int(next_id)]
-                new_logp = logp + float(add_logp)
-                new_finished = (next_id == eos_id)
-                all_candidates.append((new_tokens, new_logp, new_finished))
-
-        all_candidates.sort(key=lambda x: score_with_lp(x[1], len(x[0])), reverse=True)
-        beams = all_candidates[:beam]
-
+    for _ in range(max_len - 1):
         if all(b[2] for b in beams):
             break
 
-    best_tokens, best_logp, _ = max(beams, key=lambda x: score_with_lp(x[1], len(x[0])))
-    return best_tokens
+        all_candidates = []
+        for seq, score, finished in beams:
+            if finished:
+                all_candidates.append((seq, score, True))
+                continue
+
+            tgt = seq.unsqueeze(0)
+            logits = model(x_single, tgt)
+            next_logits = logits[:, -1, :].squeeze(0)
+            next_logits[pad_id] = -1e9
+
+            log_probs = torch.log_softmax(next_logits, dim=-1)
+            log_probs = block_repeated_ngrams(log_probs, seq.tolist(), no_repeat_ngram)
+
+            topk = torch.topk(log_probs, k=max(1, beam_size))
+            for token_id, token_lp in zip(topk.indices.tolist(), topk.values.tolist()):
+                token_id = int(token_id)
+                new_seq = torch.cat(
+                    [seq, torch.tensor([token_id], device=device, dtype=torch.long)],
+                    dim=0,
+                )
+                new_score = score + float(token_lp)
+                new_finished = (token_id == eos_id)
+                all_candidates.append((new_seq, new_score, new_finished))
+
+        all_candidates.sort(key=lambda t: (t[1] / lp(len(t[0]))), reverse=True)
+        beams = all_candidates[: max(1, beam_size)]
+
+    best = max(beams, key=lambda t: (t[1] / lp(len(t[0]))))
+    return best[0]
 
 
 def load_model(ckpt_path: str | Path, device: str):
@@ -155,21 +100,19 @@ def main():
 
     tf = build_image_transform(height=64, max_width=384)
     img = Image.open(img_path)
-    x = tf(img).unsqueeze(0)
+    x = tf(img).unsqueeze(0).to(device)
 
-    use_beam = False
-    if use_beam:
-        ids = beam_search_decode(
-            model, x,
-            bos_id=tok.vocab.bos, eos_id=tok.vocab.eos, pad_id=tok.vocab.pad,
-            beam=5, max_len=256, length_penalty=0.7, no_repeat_ngram=3
-        )
-    else:
-        ids = greedy_decode(
-            model, x,
-            bos_id=tok.vocab.bos, eos_id=tok.vocab.eos, pad_id=tok.vocab.pad,
-            max_len=256, no_repeat_ngram=3
-        )
+    ids = beam_decode_single(
+        model,
+        x,
+        bos_id=tok.vocab.bos,
+        eos_id=tok.vocab.eos,
+        pad_id=tok.vocab.pad,
+        beam_size=5,
+        max_len=160,
+        length_penalty_alpha=0.6,
+        no_repeat_ngram=3,
+    ).tolist()
 
     latex = tok.decode(ids, skip_special=True)
     print("pred:", latex)
