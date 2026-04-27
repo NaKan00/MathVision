@@ -80,7 +80,7 @@ def main():
     height = 64
     max_width = 384
     max_len = 256
-    num_epochs = 20
+    num_epochs = 10
     save_every_steps = 500
 
     df = pd.read_csv(TRAIN)
@@ -95,14 +95,22 @@ def main():
         pad_id=tok.vocab.pad,
         d_model=d_model,
         encoder_variant=encoder_variant,
-        encoder_pretrained=False,
+        encoder_pretrained=True,
     ).to(device)
 
-    opt = torch.optim.AdamW(model.parameters(), lr=3e-4)
-    loss_fn = torch.nn.CrossEntropyLoss(ignore_index=tok.vocab.pad)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
+
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        opt, mode="min", factor=0.5, patience=1
+    )
+
+    loss_fn = torch.nn.CrossEntropyLoss(
+        ignore_index=tok.vocab.pad,
+        label_smoothing=0.05
+    )
 
     resume_path = OUT_DIR / "last.pt"
-    start_epoch = 1
+    start_epoch = 0
     global_step = 0
 
     if resume_path.exists():
@@ -113,7 +121,7 @@ def main():
         global_step = int(ckpt.get("step", 0))
         print(f"Resuming from {resume_path}: epoch={start_epoch}, step={global_step}")
 
-    for epoch in range(start_epoch + 1, num_epochs + 1):
+    for epoch in range(start_epoch, num_epochs + 1):
         model.train()
         pbar = tqdm(train_dl, desc=f"train e{epoch}", leave=True)
 
@@ -141,6 +149,7 @@ def main():
                 save_checkpoint(OUT_DIR / "last.pt", model, opt, epoch, global_step, tok, d_model, encoder_variant)
 
         val_loss = evaluate(model, val_dl, loss_fn, device)
+        scheduler.step(val_loss)
         print(f"\nepoch {epoch}: val_loss={val_loss:.4f}")
 
         save_checkpoint(OUT_DIR / f"epoch_{epoch}.pt", model, opt, epoch, global_step, tok, d_model, encoder_variant)
