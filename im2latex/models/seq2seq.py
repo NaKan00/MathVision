@@ -26,7 +26,22 @@ class Img2Latex(nn.Module):
             pad_id=pad_id,
         )
 
-    def forward(self, images: torch.Tensor, tgt_inp: torch.Tensor) -> torch.Tensor:
-        memory = self.encoder(images)          # [S,B,D]
-        logits = self.decoder(tgt_inp, memory) # [B,T,V]
+    def forward(
+        self,
+        images: torch.Tensor,
+        tgt_inp: torch.Tensor,
+        image_pad_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+
+        memory, memory_key_padding_mask = self.encoder(
+            images,
+            image_pad_mask=image_pad_mask,
+        )
+
+        logits = self.decoder(
+            tgt_inp,
+            memory,
+            memory_key_padding_mask=memory_key_padding_mask,
+        )
+
         return logits

@@ -4,20 +4,35 @@ from torchvision import transforms
 
 def build_image_transform(height: int = 64, max_width: int = 384):
     """
-    Для MPS важно ограничивать ширину -> иначе S=H'*W' растёт и attention ест память.
+    Resize with aspect ratio, no crop.
+    Output tensor always has fixed height=height.
+    Width is variable up to max_width.
     """
-    def resize_keep_aspect_and_clip(img: Image.Image) -> Image.Image:
+
+    def resize_keep_aspect(img: Image.Image) -> Image.Image:
+        img = img.convert("L")
+
         w, h = img.size
+
+        scale = height / h
         new_h = height
-        new_w = int(w * (new_h / h))
+        new_w = int(w * scale)
+
+        if new_w > max_width:
+            scale = max_width / new_w
+            new_w = max_width
+            new_h = max(1, int(new_h * scale))
+
         img = img.resize((new_w, new_h), Image.BILINEAR)
 
-        if img.size[0] > max_width:
-            img = img.crop((0, 0, max_width, new_h))
-        return img
+        canvas = Image.new("L", (new_w, height), color=255)
+
+        top = (height - new_h) // 2
+        canvas.paste(img, (0, top))
+
+        return canvas
 
     return transforms.Compose([
-        transforms.Lambda(lambda im: im.convert("L")),
-        transforms.Lambda(resize_keep_aspect_and_clip),
+        transforms.Lambda(resize_keep_aspect),
         transforms.ToTensor(),
     ])

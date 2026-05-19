@@ -53,18 +53,30 @@ class Im2LatexDataset(Dataset):
 
 def collate_batch(batch: List[Dict], pad_id: int):
     images = [b["image"] for b in batch]  # [1,H,W]
+
     H = images[0].shape[1]
-    maxW = max(im.shape[2] for im in images)
+    widths = [im.shape[2] for im in images]
+    maxW = max(widths)
 
+    # image tensor
     x = torch.zeros(len(images), 1, H, maxW, dtype=images[0].dtype)
-    for i, im in enumerate(images):
-        x[i, :, :, : im.shape[2]] = im
 
+    # True = padding
+    image_pad_mask = torch.ones(len(images), maxW, dtype=torch.bool)
+
+    for i, im in enumerate(images):
+        w = im.shape[2]
+
+        x[i, :, :, :w] = im
+        image_pad_mask[i, :w] = False
+
+    # token padding
     toks = [b["tokens"] for b in batch]
     maxL = max(t.shape[0] for t in toks)
 
     y = torch.full((len(toks), maxL), pad_id, dtype=torch.long)
+
     for i, t in enumerate(toks):
         y[i, : t.shape[0]] = t
 
-    return x, y
+    return x, y, image_pad_mask

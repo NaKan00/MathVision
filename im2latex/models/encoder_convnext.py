@@ -5,8 +5,8 @@ from torchvision.models import convnext_tiny, convnext_small
 
 class ConvNeXtEncoder(nn.Module):
     """
-    Вход:  x [B, 1, 64, W]
-    Выход: mem [S, B, D]
+    in:  x [B, 1, 64, W]
+    out: mem [S, B, D]
     """
 
     def __init__(self, variant: str = "small", d_model: int = 256, pretrained: bool = True):
@@ -32,13 +32,38 @@ class ConvNeXtEncoder(nn.Module):
         # приводим каналы к d_model
         self.out_proj = nn.Conv2d(c_out, d_model, kernel_size=1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        image_pad_mask: torch.Tensor | None = None,
+    ):
         x = self.in_proj(x)          # [B,3,64,W]
         feat = self.features(x)      # [B,C,H',W']
         feat = self.out_proj(feat)   # [B,D,H',W']
 
         B, D, H, W = feat.shape
+
         feat = feat.permute(0, 2, 3, 1).contiguous()  # [B,H,W,D]
         feat = feat.view(B, H * W, D)                 # [B,S,D]
+
         mem = feat.transpose(0, 1)                    # [S,B,D]
-        return mem
+
+        memory_key_padding_mask = None
+
+        if image_pad_mask is not None:
+            # downsample width mask до размера encoder feature map
+            pooled = torch.nn.functional.interpolate(
+                image_pad_mask.float().unsqueeze(1),
+                size=W,
+                mode="nearest",
+            ).squeeze(1)
+
+            pooled = pooled.bool()  # [B,W]
+
+            # repeat по H
+            pooled = pooled.unsqueeze(1).expand(B, H, W)
+
+            # flatten
+            memory_key_padding_mask = pooled.reshape(B, H * W)
+
+        return mem, memory_key_padding_mask

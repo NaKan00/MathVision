@@ -10,10 +10,14 @@ class PositionalEncoding(nn.Module):
 
         pe = torch.zeros(max_len, d_model)
         pos = torch.arange(0, max_len).unsqueeze(1)
-        div = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        div = torch.exp(
+            torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model)
+        )
+
         pe[:, 0::2] = torch.sin(pos * div)
         pe[:, 1::2] = torch.cos(pos * div)
-        pe = pe.unsqueeze(1)  # [max_len, 1, d_model]
+        pe = pe.unsqueeze(1)  
+
         self.register_buffer("pe", pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -34,6 +38,7 @@ class TransformerDecoder(nn.Module):
         pad_id: int = 0,
     ):
         super().__init__()
+
         self.pad_id = pad_id
         self.d_model = d_model
 
@@ -47,33 +52,40 @@ class TransformerDecoder(nn.Module):
             dropout=dropout,
             batch_first=False,
         )
+
         self.dec = nn.TransformerDecoder(layer, num_layers=num_layers)
         self.out = nn.Linear(d_model, vocab_size)
 
     @staticmethod
     def causal_mask(T: int, device) -> torch.Tensor:
-        # [T, T] True = запрещено смотреть
-        return torch.triu(torch.ones(T, T, device=device, dtype=torch.bool), diagonal=1)
+        # [T, T], True = forbidden to attend
+        return torch.triu(
+            torch.ones(T, T, device=device, dtype=torch.bool),
+            diagonal=1,
+        )
 
-    def forward(self, tgt_ids: torch.Tensor, memory: torch.Tensor) -> torch.Tensor:
-        """
-        tgt_ids: [B, T]  (teacher forcing input)
-        memory:  [S, B, D]
-        returns logits: [B, T, V]
-        """
+    def forward(
+        self,
+        tgt_ids: torch.Tensor,
+        memory: torch.Tensor,
+        memory_key_padding_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        
         B, T = tgt_ids.shape
-        tgt = self.emb(tgt_ids).transpose(0, 1) * math.sqrt(self.d_model)  # [T,B,D]
+
+        tgt = self.emb(tgt_ids).transpose(0, 1) * math.sqrt(self.d_model)
         tgt = self.pos(tgt)
 
-        tgt_mask = self.causal_mask(T, tgt.device)  # [T,T]
-        tgt_key_padding_mask = (tgt_ids == self.pad_id)  # [B,T]
+        tgt_mask = self.causal_mask(T, tgt.device)
+        tgt_key_padding_mask = tgt_ids == self.pad_id
 
         h = self.dec(
             tgt=tgt,
             memory=memory,
             tgt_mask=tgt_mask,
             tgt_key_padding_mask=tgt_key_padding_mask,
-        )  # [T,B,D]
+            memory_key_padding_mask=memory_key_padding_mask,
+        )
 
-        logits = self.out(h).transpose(0, 1)  # [B,T,V]
+        logits = self.out(h).transpose(0, 1)
         return logits
