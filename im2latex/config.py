@@ -1,9 +1,9 @@
 from pathlib import Path
 
 
-
+# =========================
 # Paths
-
+# =========================
 
 ROOT_DIR = Path(".")
 
@@ -57,20 +57,19 @@ BATCH_SIZE = 4
 MAX_LEN = 256
 FILTER_MAX_FORMULA_CHARS = 350
 
-
 USE_LENGTH_BUCKETING = True
 BUCKET_SIZE = 512
 
 NUM_EPOCHS = 10
 
-LEARNING_RATE = 3e-4
+LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 1e-4
 
-LABEL_SMOOTHING = 0.1
+LABEL_SMOOTHING = 0.05
 
 SAVE_EVERY_STEPS = 500
 
-GRAD_ACCUM_STEPS = 4
+GRAD_ACCUM_STEPS = 1
 
 
 # =========================
@@ -79,7 +78,7 @@ GRAD_ACCUM_STEPS = 4
 
 BEAM_SIZE = 5
 
-REPEAT_PENALTY = 1.0
+REPEAT_PENALTY = 1.05
 
 
 # =========================

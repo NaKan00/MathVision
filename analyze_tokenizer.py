@@ -18,10 +18,13 @@ CHECK_TOKENS = [
     r"\sqrt",
     r"\int",
     r"\sum",
-    "{",
-    "}",
-    "_",
-    "^",
+
+    r"\left(",
+    r"\right)",
+    r"\left[",
+    r"\right]",
+    r"\left\{",
+    r"\right\}",
 ]
 
 
