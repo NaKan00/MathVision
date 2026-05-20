@@ -1,7 +1,8 @@
 from pathlib import Path
+import random
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Sampler
 import pandas as pd
 from tqdm import tqdm
 
@@ -28,6 +29,8 @@ from im2latex.config import (
     LABEL_SMOOTHING,
     SAVE_EVERY_STEPS,
     GRAD_ACCUM_STEPS,
+    USE_LENGTH_BUCKETING,
+    BUCKET_SIZE,
 )
 
 from im2latex.data.tokenizer import Tokenizer
@@ -35,6 +38,48 @@ from im2latex.data.transforms import build_image_transform
 from im2latex.data.dataset import Im2LatexDataset, collate_batch
 from im2latex.models.seq2seq import Img2Latex
 from im2latex.utils import save_tokenizer
+
+
+class LengthBucketBatchSampler(Sampler):
+    def __init__(self, dataset, batch_size: int, bucket_size: int = 512, shuffle: bool = True):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.bucket_size = bucket_size
+        self.shuffle = shuffle
+
+        self.lengths = [
+            len(str(row["formula"]))
+            for row in dataset.rows
+        ]
+
+    def __iter__(self):
+        indices = list(range(len(self.dataset)))
+
+        if self.shuffle:
+            random.shuffle(indices)
+
+        buckets = [
+            indices[i: i + self.bucket_size]
+            for i in range(0, len(indices), self.bucket_size)
+        ]
+
+        batches = []
+
+        for bucket in buckets:
+            bucket.sort(key=lambda idx: self.lengths[idx])
+
+            for i in range(0, len(bucket), self.batch_size):
+                batch = bucket[i: i + self.batch_size]
+                if len(batch) == self.batch_size:
+                    batches.append(batch)
+
+        if self.shuffle:
+            random.shuffle(batches)
+
+        return iter(batches)
+
+    def __len__(self):
+        return len(self.dataset) // self.batch_size
 
 
 def make_loader(csv_path, images_dir, tok, batch_size, shuffle):
@@ -51,13 +96,28 @@ def make_loader(csv_path, images_dir, tok, batch_size, shuffle):
         max_len=MAX_LEN,
     )
 
-    dl = DataLoader(
-        ds,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=0,
-        collate_fn=lambda b: collate_batch(b, tok.vocab.pad),
-    )
+    if shuffle and USE_LENGTH_BUCKETING:
+        batch_sampler = LengthBucketBatchSampler(
+            ds,
+            batch_size=batch_size,
+            bucket_size=BUCKET_SIZE,
+            shuffle=True,
+        )
+
+        dl = DataLoader(
+            ds,
+            batch_sampler=batch_sampler,
+            num_workers=0,
+            collate_fn=lambda b: collate_batch(b, tok.vocab.pad),
+        )
+    else:
+        dl = DataLoader(
+            ds,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=0,
+            collate_fn=lambda b: collate_batch(b, tok.vocab.pad),
+        )
 
     return dl
 
@@ -132,9 +192,10 @@ def main():
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_csv(TRAIN_CSV)
+    df["formula"] = df["formula"].astype(str)
 
     tok = Tokenizer.build(
-        df["formula"].astype(str).tolist(),
+        df["formula"].tolist(),
         min_freq=VOCAB_MIN_FREQ,
         max_size=VOCAB_MAX_SIZE,
     )
@@ -196,13 +257,9 @@ def main():
             scheduler.load_state_dict(ckpt["scheduler_state"])
 
         last_epoch = int(ckpt.get("epoch", 0))
-
         start_epoch = last_epoch + 1
         global_step = int(ckpt.get("step", 0))
-
-        best_val_loss = float(
-            ckpt.get("best_val_loss", float("inf"))
-        )
+        best_val_loss = float(ckpt.get("best_val_loss", float("inf")))
 
         print(
             f"Resuming from {LAST_CKPT}: "
@@ -214,7 +271,6 @@ def main():
 
     for epoch in range(start_epoch, NUM_EPOCHS + 1):
         model.train()
-
         opt.zero_grad()
 
         pbar = tqdm(
@@ -247,7 +303,6 @@ def main():
             )
 
             loss = loss / GRAD_ACCUM_STEPS
-
             loss.backward()
 
             if global_step % GRAD_ACCUM_STEPS == 0:
@@ -257,7 +312,6 @@ def main():
                 )
 
                 opt.step()
-
                 opt.zero_grad()
 
             current_lr = opt.param_groups[0]["lr"]
