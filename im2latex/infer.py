@@ -9,13 +9,36 @@ from im2latex.data.transforms import build_image_transform
 from im2latex.utils import load_tokenizer
 
 
+def has_repeat_ngram(seq_ids, next_id, ngram_size: int) -> bool:
+    if ngram_size <= 0:
+        return False
+
+    seq = list(seq_ids) + [next_id]
+
+    if len(seq) < ngram_size:
+        return False
+
+    new_ngram = tuple(seq[-ngram_size:])
+
+    for i in range(len(seq) - ngram_size):
+        if tuple(seq[i: i + ngram_size]) == new_ngram:
+            return True
+
+    return False
+
+
+def normalized_score(score: float, length: int, length_penalty: float) -> float:
+    length = max(length, 1)
+    return score / (length ** length_penalty)
+
+
 @torch.no_grad()
 def greedy_decode(
     model: Img2Latex,
     image_tensor: torch.Tensor,
     bos_id: int,
     eos_id: int,
-    max_len: int = 256,
+    max_len: int = 160,
 ):
     model.eval()
     device = next(model.parameters()).device
@@ -32,7 +55,7 @@ def greedy_decode(
 
     ys = torch.tensor([[bos_id]], dtype=torch.long, device=device)
 
-    for _ in range(max_len):
+    for _ in range(max_len - 1):
         logits = model.decoder(
             ys,
             memory,
@@ -42,7 +65,10 @@ def greedy_decode(
         next_id = int(torch.argmax(logits[0, -1], dim=-1).item())
 
         ys = torch.cat(
-            [ys, torch.tensor([[next_id]], dtype=torch.long, device=device)],
+            [
+                ys,
+                torch.tensor([[next_id]], dtype=torch.long, device=device),
+            ],
             dim=1,
         )
 
@@ -59,8 +85,11 @@ def beam_decode(
     bos_id: int,
     eos_id: int,
     beam_size: int = 5,
-    max_len: int = 256,
-    repeat_penalty: float = 1.0,
+    max_len: int = 160,
+    repeat_penalty: float = 1.05,
+    length_penalty: float = 0.8,
+    no_repeat_ngram_size: int = 3,
+    min_len: int = 4,
 ):
     model.eval()
     device = next(model.parameters()).device
@@ -83,7 +112,7 @@ def beam_decode(
         )
     ]
 
-    for _ in range(max_len):
+    for _ in range(max_len - 1):
         candidates = []
 
         for seq, score, finished in beams:
@@ -99,15 +128,32 @@ def beam_decode(
 
             log_probs = torch.log_softmax(logits[0, -1], dim=-1)
 
+            seq_list = seq[0].tolist()
+
+            if len(seq_list) < min_len:
+                log_probs[eos_id] = -1e9
+
             if repeat_penalty and repeat_penalty > 1.0:
-                for prev_id in seq[0].tolist():
+                for prev_id in set(seq_list):
                     if prev_id not in {bos_id, eos_id}:
                         log_probs[prev_id] /= repeat_penalty
 
-            top_scores, top_ids = torch.topk(log_probs, beam_size)
+            top_scores, top_ids = torch.topk(
+                log_probs,
+                k=min(beam_size * 3, log_probs.numel()),
+            )
+
+            added = 0
 
             for token_score, token_id in zip(top_scores, top_ids):
                 token_id_int = int(token_id.item())
+
+                if has_repeat_ngram(
+                    seq_list,
+                    token_id_int,
+                    no_repeat_ngram_size,
+                ):
+                    continue
 
                 new_seq = torch.cat(
                     [
@@ -126,11 +172,35 @@ def beam_decode(
 
                 candidates.append((new_seq, new_score, new_finished))
 
-        candidates.sort(key=lambda x: x[1] / x[0].shape[1], reverse=True)
+                added += 1
+                if added >= beam_size:
+                    break
+
+        if not candidates:
+            break
+
+        candidates.sort(
+            key=lambda x: normalized_score(
+                x[1],
+                x[0].shape[1],
+                length_penalty,
+            ),
+            reverse=True,
+        )
+
         beams = candidates[:beam_size]
 
         if all(finished for _, _, finished in beams):
             break
+
+    beams.sort(
+        key=lambda x: normalized_score(
+            x[1],
+            x[0].shape[1],
+            length_penalty,
+        ),
+        reverse=True,
+    )
 
     best_seq = beams[0][0]
     return best_seq[0].tolist()
@@ -164,7 +234,7 @@ def main():
     parser.add_argument(
         "--ckpt",
         type=str,
-        default="checkpoints/im2latex_convnext/last.pt",
+        default="checkpoints/im2latex_convnext/best.pt",
     )
     parser.add_argument(
         "--tokenizer",
@@ -179,10 +249,14 @@ def main():
     )
 
     parser.add_argument("--beam_size", type=int, default=5)
-    parser.add_argument("--repeat_penalty", type=float, default=1.0)
-    parser.add_argument("--max_len", type=int, default=256)
+    parser.add_argument("--repeat_penalty", type=float, default=1.05)
+    parser.add_argument("--length_penalty", type=float, default=0.8)
+    parser.add_argument("--no_repeat_ngram_size", type=int, default=3)
+    parser.add_argument("--max_len", type=int, default=160)
+    parser.add_argument("--min_len", type=int, default=4)
+
     parser.add_argument("--height", type=int, default=64)
-    parser.add_argument("--max_width", type=int, default=384)
+    parser.add_argument("--max_width", type=int, default=512)
 
     args = parser.parse_args()
 
@@ -216,6 +290,9 @@ def main():
             beam_size=args.beam_size,
             max_len=args.max_len,
             repeat_penalty=args.repeat_penalty,
+            length_penalty=args.length_penalty,
+            no_repeat_ngram_size=args.no_repeat_ngram_size,
+            min_len=args.min_len,
         )
 
     latex = tok.decode(ids, skip_special=True)
