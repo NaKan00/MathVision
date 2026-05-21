@@ -71,6 +71,10 @@ SAVE_EVERY_STEPS = 500
 
 GRAD_ACCUM_STEPS = 1
 
+USE_EMA = True
+EMA_DECAY = 0.999
+BEST_EMA_CKPT = CHECKPOINT_DIR / "best_ema.pt"
+
 
 # =========================
 # Decoding

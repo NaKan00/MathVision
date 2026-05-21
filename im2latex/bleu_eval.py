@@ -9,6 +9,7 @@ from im2latex.data.dataset import Im2LatexDataset, collate_batch
 from im2latex.models.seq2seq import Img2Latex
 from im2latex.utils import load_tokenizer
 from im2latex.postprocess import postprocess_latex
+from im2latex.canonical import canonicalize_latex
 
 
 def normalize_tex(s: str) -> str:
@@ -237,6 +238,16 @@ def exact_match(preds, refs):
     return 100.0 * eq / max(1, len(refs))
 
 
+def canonical_exact_match(preds, refs):
+    eq = 0
+
+    for p, r in zip(preds, refs):
+        if canonicalize_latex(p) == canonicalize_latex(r):
+            eq += 1
+
+    return 100.0 * eq / max(1, len(refs))
+
+
 def edit_distance(a: str, b: str) -> int:
     n, m = len(a), len(b)
     dp = list(range(m + 1))
@@ -388,10 +399,12 @@ def main():
 
     bleu_char = corpus_char_bleu(preds, refs, max_n=4, smooth=1.0)
     em = exact_match(preds, refs)
+    canonical_em = canonical_exact_match(preds, refs)
     edit_sim = normalized_edit_similarity(preds, refs)
 
     print(f"Char-BLEU = {bleu_char:.3f}")
     print(f"ExactMatch = {em:.3f}%")
+    print(f"CanonicalExactMatch = {canonical_em:.3f}%")
     print(f"EditSimilarity = {edit_sim:.3f}%")
 
 
