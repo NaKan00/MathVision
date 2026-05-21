@@ -1,8 +1,9 @@
-torch
-torchvision
-torchaudio
-pillow
-tqdm
-pandas
-sacrebleu
-pyyaml
+torch>=2.3.0
+torchvision>=0.18.0
+torchaudio>=2.3.0
+
+pillow>=10.0.0
+tqdm>=4.66.0
+pandas>=2.2.0
+
+sacrebleu>=2.4.0
