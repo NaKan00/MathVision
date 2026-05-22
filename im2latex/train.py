@@ -35,6 +35,10 @@ from im2latex.config import (
     BUCKET_SIZE,
     USE_EMA,
     EMA_DECAY,
+    USE_SCHEDULED_SAMPLING,
+    SS_START_EPOCH,
+    SS_MAX_PROB,
+    SS_WARMUP_EPOCHS,
 )
 
 from im2latex.data.tokenizer import Tokenizer
@@ -112,6 +116,19 @@ class LengthBucketBatchSampler(Sampler):
 
     def __len__(self):
         return len(self.dataset) // self.batch_size
+
+
+def get_scheduled_sampling_prob(epoch: int) -> float:
+    if not USE_SCHEDULED_SAMPLING:
+        return 0.0
+
+    if epoch < SS_START_EPOCH:
+        return 0.0
+
+    progress = (epoch - SS_START_EPOCH + 1) / max(SS_WARMUP_EPOCHS, 1)
+    progress = min(max(progress, 0.0), 1.0)
+
+    return SS_MAX_PROB * progress
 
 
 def make_loader(csv_path, images_dir, tok, batch_size, shuffle):
@@ -349,6 +366,10 @@ def main():
         model.train()
         opt.zero_grad()
 
+        ss_prob = get_scheduled_sampling_prob(epoch)
+        if ss_prob > 0.0:
+            print(f"Scheduled Sampling enabled: prob={ss_prob:.4f}")
+
         pbar = tqdm(
             train_dl,
             desc=f"train e{epoch}",
@@ -365,11 +386,44 @@ def main():
             tgt_inp = y[:, :-1]
             tgt_out = y[:, 1:]
 
-            logits = model(
-                x,
-                tgt_inp,
-                image_pad_mask=image_pad_mask,
-            )
+            if ss_prob > 0.0:
+                with torch.no_grad():
+                    teacher_logits = model(
+                        x,
+                        tgt_inp,
+                        image_pad_mask=image_pad_mask,
+                    )
+
+                    pred_ids = torch.argmax(
+                        teacher_logits,
+                        dim=-1,
+                    )
+
+                replace_mask = torch.rand(
+                    tgt_inp.shape,
+                    device=tgt_inp.device,
+                ) < ss_prob
+
+                replace_mask[:, 0] = False
+                replace_mask = replace_mask & (tgt_inp != tok.vocab.pad)
+
+                mixed_tgt_inp = torch.where(
+                    replace_mask,
+                    pred_ids,
+                    tgt_inp,
+                )
+
+                logits = model(
+                    x,
+                    mixed_tgt_inp,
+                    image_pad_mask=image_pad_mask,
+                )
+            else:
+                logits = model(
+                    x,
+                    tgt_inp,
+                    image_pad_mask=image_pad_mask,
+                )
 
             B, T, V = logits.shape
 
@@ -400,6 +454,7 @@ def main():
                 loss=f"{loss.item() * GRAD_ACCUM_STEPS:.3f}",
                 lr=f"{current_lr:.2e}",
                 step=global_step,
+                ss=f"{ss_prob:.3f}",
             )
 
             if global_step % SAVE_EVERY_STEPS == 0:

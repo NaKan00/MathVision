@@ -14,12 +14,14 @@ VAL_CSV = DATASET_DIR / "val.csv"
 
 IMAGES_DIR = DATASET_DIR / "images" / "formula_images_processed"
 
-CHECKPOINT_DIR = ROOT_DIR / "checkpoints" / "im2latex_convnext"
+# v2: отдельная папка, чтобы не затереть сильный baseline
+CHECKPOINT_DIR = ROOT_DIR / "checkpoints" / "im2latex_v2_d384"
 
 TOKENIZER_PATH = CHECKPOINT_DIR / "tokenizer.json"
 
 LAST_CKPT = CHECKPOINT_DIR / "last.pt"
 BEST_CKPT = CHECKPOINT_DIR / "best.pt"
+BEST_EMA_CKPT = CHECKPOINT_DIR / "best_ema.pt"
 
 
 # =========================
@@ -42,7 +44,7 @@ VOCAB_MAX_SIZE = 8000
 # Model
 # =========================
 
-D_MODEL = 256
+D_MODEL = 384
 
 ENCODER_VARIANT = "small"
 ENCODER_PRETRAINED = True
@@ -52,28 +54,43 @@ ENCODER_PRETRAINED = True
 # Training
 # =========================
 
-BATCH_SIZE = 4
+BATCH_SIZE = 2
 
-MAX_LEN = 256
+MAX_LEN = 320
 FILTER_MAX_FORMULA_CHARS = 350
 
 USE_LENGTH_BUCKETING = True
 BUCKET_SIZE = 512
 
-NUM_EPOCHS = 20
+NUM_EPOCHS = 25
 
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 8e-5
 WEIGHT_DECAY = 1e-4
 
 LABEL_SMOOTHING = 0.05
 
 SAVE_EVERY_STEPS = 500
 
-GRAD_ACCUM_STEPS = 1
+# effective batch = 2 * 2 = 4
+GRAD_ACCUM_STEPS = 2
+
+
+# =========================
+# EMA
+# =========================
 
 USE_EMA = True
 EMA_DECAY = 0.999
-BEST_EMA_CKPT = CHECKPOINT_DIR / "best_ema.pt"
+
+
+# =========================
+# Scheduled Sampling
+# =========================
+
+USE_SCHEDULED_SAMPLING = True
+SS_START_EPOCH = 8
+SS_MAX_PROB = 0.05
+SS_WARMUP_EPOCHS = 4
 
 
 # =========================
@@ -81,8 +98,7 @@ BEST_EMA_CKPT = CHECKPOINT_DIR / "best_ema.pt"
 # =========================
 
 BEAM_SIZE = 5
-
-REPEAT_PENALTY = 1.05
+REPEAT_PENALTY = 1.0
 
 
 # =========================
@@ -90,5 +106,4 @@ REPEAT_PENALTY = 1.05
 # =========================
 
 EVAL_BATCH_SIZE = 8
-
 MAX_EVAL_SAMPLES = 1000
