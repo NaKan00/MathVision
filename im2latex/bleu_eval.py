@@ -8,6 +8,8 @@ from im2latex.data.transforms import build_image_transform
 from im2latex.data.dataset import Im2LatexDataset, collate_batch
 from im2latex.models.seq2seq import Img2Latex
 from im2latex.utils import load_tokenizer
+from im2latex.postprocess import postprocess_latex
+from im2latex.canonical import canonicalize_latex
 
 
 def normalize_tex(s: str) -> str:
@@ -37,6 +39,29 @@ def load_checkpoint(ckpt_path: str) -> dict:
     raise ValueError("Cannot extract model_state from checkpoint")
 
 
+def has_repeat_ngram(seq_ids, next_id, ngram_size: int) -> bool:
+    if ngram_size <= 0:
+        return False
+
+    seq = list(seq_ids) + [next_id]
+
+    if len(seq) < ngram_size:
+        return False
+
+    new_ngram = tuple(seq[-ngram_size:])
+
+    for i in range(len(seq) - ngram_size):
+        if tuple(seq[i: i + ngram_size]) == new_ngram:
+            return True
+
+    return False
+
+
+def normalized_score(score: float, length: int, length_penalty: float) -> float:
+    length = max(length, 1)
+    return score / (length ** length_penalty)
+
+
 @torch.no_grad()
 def beam_decode_single(
     model: Img2Latex,
@@ -46,8 +71,10 @@ def beam_decode_single(
     eos_id: int,
     beam_size: int = 5,
     max_len: int = 160,
-    length_penalty_alpha: float = 0.6,
     repeat_penalty: float = 1.0,
+    length_penalty: float = 0.6,
+    no_repeat_ngram_size: int = 0,
+    min_len: int = 4,
 ):
     device = x_single.device
     model.eval()
@@ -65,18 +92,15 @@ def beam_decode_single(
         )
     ]
 
-    def lp(length: int) -> float:
-        return ((5.0 + length) / 6.0) ** length_penalty_alpha
-
     for _ in range(max_len - 1):
-        if all(b[2] for b in beams):
+        if all(finished for _, _, finished in beams):
             break
 
-        all_candidates = []
+        candidates = []
 
         for seq, score, finished in beams:
             if finished:
-                all_candidates.append((seq, score, True))
+                candidates.append((seq, score, True))
                 continue
 
             logits = model.decoder(
@@ -85,22 +109,43 @@ def beam_decode_single(
                 memory_key_padding_mask=memory_key_padding_mask,
             )
 
-            next_logits = logits[:, -1, :]
-            log_probs = torch.log_softmax(next_logits, dim=-1).squeeze(0)
+            log_probs = torch.log_softmax(
+                logits[0, -1],
+                dim=-1,
+            )
+
+            seq_list = seq[0].tolist()
+
+            if len(seq_list) < min_len:
+                log_probs[eos_id] = -1e9
 
             if repeat_penalty and repeat_penalty > 1.0:
-                for prev_id in seq[0].tolist():
+                for prev_id in set(seq_list):
                     if prev_id not in {bos_id, eos_id}:
                         log_probs[prev_id] /= repeat_penalty
 
-            topk = torch.topk(log_probs, k=beam_size)
+            top_scores, top_ids = torch.topk(
+                log_probs,
+                k=min(beam_size * 3, log_probs.numel()),
+            )
 
-            for token_id, token_lp in zip(topk.indices.tolist(), topk.values.tolist()):
+            added = 0
+
+            for token_score, token_id in zip(top_scores, top_ids):
+                token_id_int = int(token_id.item())
+
+                if has_repeat_ngram(
+                    seq_list,
+                    token_id_int,
+                    no_repeat_ngram_size,
+                ):
+                    continue
+
                 new_seq = torch.cat(
                     [
                         seq,
                         torch.tensor(
-                            [[token_id]],
+                            [[token_id_int]],
                             device=device,
                             dtype=torch.long,
                         ),
@@ -108,21 +153,36 @@ def beam_decode_single(
                     dim=1,
                 )
 
-                new_score = score + float(token_lp)
-                new_finished = token_id == eos_id
+                new_score = score + float(token_score.item())
+                new_finished = token_id_int == eos_id
 
-                all_candidates.append((new_seq, new_score, new_finished))
+                candidates.append((new_seq, new_score, new_finished))
 
-        all_candidates.sort(
-            key=lambda t: t[1] / lp(t[0].shape[1]),
+                added += 1
+                if added >= beam_size:
+                    break
+
+        if not candidates:
+            break
+
+        candidates.sort(
+            key=lambda t: normalized_score(
+                t[1],
+                t[0].shape[1],
+                length_penalty,
+            ),
             reverse=True,
         )
 
-        beams = all_candidates[:beam_size]
+        beams = candidates[:beam_size]
 
     best = max(
         beams,
-        key=lambda t: t[1] / lp(t[0].shape[1]),
+        key=lambda t: normalized_score(
+            t[1],
+            t[0].shape[1],
+            length_penalty,
+        ),
     )
 
     return best[0][0]
@@ -178,6 +238,16 @@ def exact_match(preds, refs):
     return 100.0 * eq / max(1, len(refs))
 
 
+def canonical_exact_match(preds, refs):
+    eq = 0
+
+    for p, r in zip(preds, refs):
+        if canonicalize_latex(p) == canonicalize_latex(r):
+            eq += 1
+
+    return 100.0 * eq / max(1, len(refs))
+
+
 def edit_distance(a: str, b: str) -> int:
     n, m = len(a), len(b)
     dp = list(range(m + 1))
@@ -213,7 +283,7 @@ def normalized_edit_similarity(preds, refs):
 def main():
     ap = argparse.ArgumentParser()
 
-    ap.add_argument("--ckpt", default="checkpoints/im2latex_convnext/last.pt")
+    ap.add_argument("--ckpt", default="checkpoints/im2latex_convnext/best.pt")
     ap.add_argument("--tokenizer", default="checkpoints/im2latex_convnext/tokenizer.json")
     ap.add_argument("--val_csv", default="datasets/im2latex/val.csv")
     ap.add_argument("--images_dir", default="datasets/im2latex/images/formula_images_processed")
@@ -221,15 +291,26 @@ def main():
     ap.add_argument("--batch_size", type=int, default=8)
     ap.add_argument("--max_len", type=int, default=160)
     ap.add_argument("--max_samples", type=int, default=1000)
+
     ap.add_argument("--beam", type=int, default=5)
     ap.add_argument("--repeat_penalty", type=float, default=1.0)
+    ap.add_argument("--length_penalty", type=float, default=0.6)
+    ap.add_argument("--no_repeat_ngram_size", type=int, default=0)
+    ap.add_argument("--min_len", type=int, default=4)
+
     ap.add_argument("--print_examples", type=int, default=5)
+    ap.add_argument("--postprocess", action="store_true")
     ap.add_argument("--height", type=int, default=64)
-    ap.add_argument("--max_width", type=int, default=384)
+    ap.add_argument("--max_width", type=int, default=512)
 
     args = ap.parse_args()
 
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
 
     ckpt_path = Path(args.ckpt)
     tokenizer_path = Path(args.tokenizer)
@@ -298,9 +379,18 @@ def main():
                 beam_size=max(1, args.beam),
                 max_len=args.max_len,
                 repeat_penalty=args.repeat_penalty,
+                length_penalty=args.length_penalty,
+                no_repeat_ngram_size=args.no_repeat_ngram_size,
+                min_len=args.min_len,
             )
 
-            prd = normalize_tex(tok.decode(seq.tolist(), skip_special=True))
+            raw_prd = tok.decode(seq.tolist(), skip_special=True)
+
+            if args.postprocess:
+                prd = normalize_tex(postprocess_latex(raw_prd))
+            else:
+                prd = normalize_tex(raw_prd)
+
             ref = normalize_tex(tok.decode(y[i].tolist(), skip_special=True))
 
             preds.append(prd)
@@ -314,11 +404,9 @@ def main():
 
     bleu_char = corpus_char_bleu(preds, refs, max_n=4, smooth=1.0)
     em = exact_match(preds, refs)
-    edit_sim = normalized_edit_similarity(preds, refs)
 
     print(f"Char-BLEU = {bleu_char:.3f}")
     print(f"ExactMatch = {em:.3f}%")
-    print(f"EditSimilarity = {edit_sim:.3f}%")
 
 
 if __name__ == "__main__":

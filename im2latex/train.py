@@ -1,5 +1,6 @@
 from pathlib import Path
 import random
+import copy
 
 import torch
 from torch.utils.data import DataLoader, Sampler
@@ -14,6 +15,8 @@ from im2latex.config import (
     TOKENIZER_PATH,
     LAST_CKPT,
     BEST_CKPT,
+    BEST_EMA_CKPT,
+    PRETRAIN_CKPT,
     IMAGE_HEIGHT,
     MAX_WIDTH,
     VOCAB_MIN_FREQ,
@@ -31,13 +34,47 @@ from im2latex.config import (
     GRAD_ACCUM_STEPS,
     USE_LENGTH_BUCKETING,
     BUCKET_SIZE,
+    USE_EMA,
+    EMA_DECAY,
+    USE_SCHEDULED_SAMPLING,
+    SS_START_EPOCH,
+    SS_MAX_PROB,
+    SS_WARMUP_EPOCHS,
 )
 
 from im2latex.data.tokenizer import Tokenizer
 from im2latex.data.transforms import build_image_transform
 from im2latex.data.dataset import Im2LatexDataset, collate_batch
 from im2latex.models.seq2seq import Img2Latex
-from im2latex.utils import save_tokenizer
+from im2latex.utils import save_tokenizer, load_tokenizer
+
+
+class ModelEMA:
+    def __init__(self, model, decay: float = 0.999):
+        self.decay = decay
+        self.ema = copy.deepcopy(model).eval()
+
+        for p in self.ema.parameters():
+            p.requires_grad_(False)
+
+    @torch.no_grad()
+    def update(self, model):
+        ema_state = self.ema.state_dict()
+        model_state = model.state_dict()
+
+        for k, ema_v in ema_state.items():
+            model_v = model_state[k].detach()
+
+            if ema_v.dtype.is_floating_point:
+                ema_v.mul_(self.decay).add_(model_v, alpha=1.0 - self.decay)
+            else:
+                ema_v.copy_(model_v)
+
+    def state_dict(self):
+        return self.ema.state_dict()
+
+    def load_state_dict(self, state):
+        self.ema.load_state_dict(state)
 
 
 class LengthBucketBatchSampler(Sampler):
@@ -80,6 +117,19 @@ class LengthBucketBatchSampler(Sampler):
 
     def __len__(self):
         return len(self.dataset) // self.batch_size
+
+
+def get_scheduled_sampling_prob(epoch: int) -> float:
+    if not USE_SCHEDULED_SAMPLING:
+        return 0.0
+
+    if epoch < SS_START_EPOCH:
+        return 0.0
+
+    progress = (epoch - SS_START_EPOCH + 1) / max(SS_WARMUP_EPOCHS, 1)
+    progress = min(max(progress, 0.0), 1.0)
+
+    return SS_MAX_PROB * progress
 
 
 def make_loader(csv_path, images_dir, tok, batch_size, shuffle):
@@ -167,6 +217,8 @@ def save_checkpoint(
     step,
     tok,
     best_val_loss,
+    ema=None,
+    best_ema_val_loss=None,
 ):
     ckpt = {
         "epoch": epoch,
@@ -180,13 +232,49 @@ def save_checkpoint(
         "encoder_variant": ENCODER_VARIANT,
         "encoder_pretrained": ENCODER_PRETRAINED,
         "best_val_loss": best_val_loss,
+        "best_ema_val_loss": best_ema_val_loss,
+    }
+
+    if ema is not None:
+        ckpt["ema_state"] = ema.state_dict()
+        ckpt["ema_decay"] = ema.decay
+
+    torch.save(ckpt, path)
+
+
+def save_model_only_checkpoint(
+    path: Path,
+    model_state,
+    epoch,
+    step,
+    tok,
+    val_loss,
+    is_ema: bool,
+):
+    ckpt = {
+        "epoch": epoch,
+        "step": step,
+        "model_state": model_state,
+        "vocab_size": len(tok.vocab.itos),
+        "pad_id": tok.vocab.pad,
+        "d_model": D_MODEL,
+        "encoder_variant": ENCODER_VARIANT,
+        "encoder_pretrained": ENCODER_PRETRAINED,
+        "best_val_loss": val_loss,
+        "is_ema": is_ema,
     }
 
     torch.save(ckpt, path)
 
 
 def main():
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+    else:
+        device = "cpu"
+
     print(f"device: {device}")
 
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
@@ -194,13 +282,17 @@ def main():
     df = pd.read_csv(TRAIN_CSV)
     df["formula"] = df["formula"].astype(str)
 
-    tok = Tokenizer.build(
-        df["formula"].tolist(),
-        min_freq=VOCAB_MIN_FREQ,
-        max_size=VOCAB_MAX_SIZE,
-    )
-
-    save_tokenizer(tok, TOKENIZER_PATH)
+    if TOKENIZER_PATH.exists():
+        print(f"Loading existing tokenizer: {TOKENIZER_PATH}")
+        tok = load_tokenizer(TOKENIZER_PATH)
+    else:
+        print("Building new tokenizer...")
+        tok = Tokenizer.build(
+            df["formula"].tolist(),
+            min_freq=VOCAB_MIN_FREQ,
+            max_size=VOCAB_MAX_SIZE,
+        )
+        save_tokenizer(tok, TOKENIZER_PATH)
 
     train_dl = make_loader(
         TRAIN_CSV,
@@ -226,6 +318,11 @@ def main():
         encoder_pretrained=ENCODER_PRETRAINED,
     ).to(device)
 
+    ema = None
+    if USE_EMA:
+        ema = ModelEMA(model, decay=EMA_DECAY)
+        print(f"EMA enabled: decay={EMA_DECAY}")
+
     opt = torch.optim.AdamW(
         model.parameters(),
         lr=LEARNING_RATE,
@@ -246,6 +343,7 @@ def main():
     start_epoch = 1
     global_step = 0
     best_val_loss = float("inf")
+    best_ema_val_loss = float("inf")
 
     if LAST_CKPT.exists():
         ckpt = torch.load(LAST_CKPT, map_location=device)
@@ -256,22 +354,50 @@ def main():
         if ckpt.get("scheduler_state") is not None:
             scheduler.load_state_dict(ckpt["scheduler_state"])
 
+        if ema is not None and ckpt.get("ema_state") is not None:
+            ema.load_state_dict(ckpt["ema_state"])
+            print("EMA state restored from checkpoint.")
+
         last_epoch = int(ckpt.get("epoch", 0))
         start_epoch = last_epoch + 1
         global_step = int(ckpt.get("step", 0))
         best_val_loss = float(ckpt.get("best_val_loss", float("inf")))
+        best_ema_val_loss = float(ckpt.get("best_ema_val_loss", float("inf")))
 
         print(
             f"Resuming from {LAST_CKPT}: "
             f"last_epoch={last_epoch}, "
             f"next_epoch={start_epoch}, "
             f"step={global_step}, "
-            f"best_val_loss={best_val_loss:.4f}"
+            f"best_val_loss={best_val_loss:.4f}, "
+            f"best_ema_val_loss={best_ema_val_loss:.4f}"
+        )
+
+    elif PRETRAIN_CKPT is not None and Path(PRETRAIN_CKPT).exists():
+        ckpt = torch.load(PRETRAIN_CKPT, map_location=device)
+
+        model.load_state_dict(ckpt["model_state"], strict=True)
+
+        if ema is not None:
+            ema.load_state_dict(ckpt["model_state"])
+            print("EMA initialized from pretrained checkpoint.")
+
+        start_epoch = 1
+        global_step = 0
+        best_val_loss = float("inf")
+        best_ema_val_loss = float("inf")
+
+        print(
+            f"Starting fine-tune from pretrained checkpoint: {PRETRAIN_CKPT}"
         )
 
     for epoch in range(start_epoch, NUM_EPOCHS + 1):
         model.train()
         opt.zero_grad()
+
+        ss_prob = get_scheduled_sampling_prob(epoch)
+        if ss_prob > 0.0:
+            print(f"Scheduled Sampling enabled: prob={ss_prob:.4f}")
 
         pbar = tqdm(
             train_dl,
@@ -289,11 +415,44 @@ def main():
             tgt_inp = y[:, :-1]
             tgt_out = y[:, 1:]
 
-            logits = model(
-                x,
-                tgt_inp,
-                image_pad_mask=image_pad_mask,
-            )
+            if ss_prob > 0.0:
+                with torch.no_grad():
+                    teacher_logits = model(
+                        x,
+                        tgt_inp,
+                        image_pad_mask=image_pad_mask,
+                    )
+
+                    pred_ids = torch.argmax(
+                        teacher_logits,
+                        dim=-1,
+                    )
+
+                replace_mask = torch.rand(
+                    tgt_inp.shape,
+                    device=tgt_inp.device,
+                ) < ss_prob
+
+                replace_mask[:, 0] = False
+                replace_mask = replace_mask & (tgt_inp != tok.vocab.pad)
+
+                mixed_tgt_inp = torch.where(
+                    replace_mask,
+                    pred_ids,
+                    tgt_inp,
+                )
+
+                logits = model(
+                    x,
+                    mixed_tgt_inp,
+                    image_pad_mask=image_pad_mask,
+                )
+            else:
+                logits = model(
+                    x,
+                    tgt_inp,
+                    image_pad_mask=image_pad_mask,
+                )
 
             B, T, V = logits.shape
 
@@ -312,6 +471,10 @@ def main():
                 )
 
                 opt.step()
+
+                if ema is not None:
+                    ema.update(model)
+
                 opt.zero_grad()
 
             current_lr = opt.param_groups[0]["lr"]
@@ -320,6 +483,7 @@ def main():
                 loss=f"{loss.item() * GRAD_ACCUM_STEPS:.3f}",
                 lr=f"{current_lr:.2e}",
                 step=global_step,
+                ss=f"{ss_prob:.3f}",
             )
 
             if global_step % SAVE_EVERY_STEPS == 0:
@@ -332,6 +496,8 @@ def main():
                     global_step,
                     tok,
                     best_val_loss,
+                    ema=ema,
+                    best_ema_val_loss=best_ema_val_loss,
                 )
 
         val_loss = evaluate(
@@ -342,6 +508,17 @@ def main():
         )
 
         print(f"\nepoch {epoch}: val_loss={val_loss:.4f}")
+
+        ema_val_loss = None
+        if ema is not None:
+            ema_val_loss = evaluate(
+                ema.ema,
+                val_dl,
+                loss_fn,
+                device,
+            )
+
+            print(f"epoch {epoch}: ema_val_loss={ema_val_loss:.4f}")
 
         scheduler.step()
 
@@ -354,6 +531,8 @@ def main():
             global_step,
             tok,
             best_val_loss,
+            ema=ema,
+            best_ema_val_loss=best_ema_val_loss,
         )
 
         if val_loss < best_val_loss:
@@ -368,12 +547,33 @@ def main():
                 global_step,
                 tok,
                 best_val_loss,
+                ema=ema,
+                best_ema_val_loss=best_ema_val_loss,
             )
 
             print(
                 f"new best checkpoint saved: "
                 f"best.pt, val_loss={best_val_loss:.4f}"
             )
+
+        if ema is not None and ema_val_loss is not None:
+            if ema_val_loss < best_ema_val_loss:
+                best_ema_val_loss = ema_val_loss
+
+                save_model_only_checkpoint(
+                    BEST_EMA_CKPT,
+                    ema.state_dict(),
+                    epoch,
+                    global_step,
+                    tok,
+                    ema_val_loss,
+                    is_ema=True,
+                )
+
+                print(
+                    f"new best EMA checkpoint saved: "
+                    f"best_ema.pt, ema_val_loss={best_ema_val_loss:.4f}"
+                )
 
         save_checkpoint(
             LAST_CKPT,
@@ -384,6 +584,8 @@ def main():
             global_step,
             tok,
             best_val_loss,
+            ema=ema,
+            best_ema_val_loss=best_ema_val_loss,
         )
 
 
