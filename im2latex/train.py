@@ -272,16 +272,23 @@ def main():
 
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 
-    df = pd.read_csv(TRAIN_CSV)
-    df["formula"] = df["formula"].astype(str)
+    if TOKENIZER_PATH.exists():
+        from im2latex.utils import load_tokenizer
 
-    tok = Tokenizer.build(
-        df["formula"].tolist(),
-        min_freq=VOCAB_MIN_FREQ,
-        max_size=VOCAB_MAX_SIZE,
-    )
+        tok = load_tokenizer(TOKENIZER_PATH)
+        print(f"Loaded existing tokenizer: {TOKENIZER_PATH}")
+    else:
+        df = pd.read_csv(TRAIN_CSV)
+        df["formula"] = df["formula"].astype(str)
 
-    save_tokenizer(tok, TOKENIZER_PATH)
+        tok = Tokenizer.build(
+            df["formula"].tolist(),
+            min_freq=VOCAB_MIN_FREQ,
+            max_size=VOCAB_MAX_SIZE,
+        )
+
+        save_tokenizer(tok, TOKENIZER_PATH)
+        print(f"Built and saved tokenizer: {TOKENIZER_PATH}")
 
     train_dl = make_loader(
         TRAIN_CSV,
@@ -338,17 +345,30 @@ def main():
         ckpt = torch.load(LAST_CKPT, map_location=device)
 
         model.load_state_dict(ckpt["model_state"])
-        opt.load_state_dict(ckpt["opt_state"])
+
+        has_optimizer_state = ckpt.get("opt_state") is not None
+
+        if has_optimizer_state:
+            opt.load_state_dict(ckpt["opt_state"])
+            print("Optimizer state restored from checkpoint.")
+        else:
+            print("No optimizer state in checkpoint. Starting optimizer from scratch.")
 
         if ckpt.get("scheduler_state") is not None:
             scheduler.load_state_dict(ckpt["scheduler_state"])
+            print("Scheduler state restored from checkpoint.")
+        else:
+            print("No scheduler state in checkpoint. Starting scheduler from scratch.")
 
         if ema is not None and ckpt.get("ema_state") is not None:
             ema.load_state_dict(ckpt["ema_state"])
             print("EMA state restored from checkpoint.")
 
         last_epoch = int(ckpt.get("epoch", 0))
-        start_epoch = last_epoch + 1
+        if has_optimizer_state:
+            start_epoch = last_epoch + 1
+        else:
+            start_epoch = last_epoch
         global_step = int(ckpt.get("step", 0))
         best_val_loss = float(ckpt.get("best_val_loss", float("inf")))
         best_ema_val_loss = float(ckpt.get("best_ema_val_loss", float("inf")))

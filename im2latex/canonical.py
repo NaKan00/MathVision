@@ -52,18 +52,13 @@ def normalize_angle_brackets(s: str) -> str:
 
 
 def normalize_operatorname_mathrm(s: str) -> str:
-    # \operatorname{dim} == \mathrm{dim}
     s = re.sub(r"\\operatorname\{([^{}]+)\}", r"\\mathrm{\1}", s)
     return s
 
 
 def normalize_frac_shortcuts(s: str) -> str:
-    # \frac12 -> \frac{1}{2}
     s = re.sub(r"\\frac([0-9])([0-9])", r"\\frac{\1}{\2}", s)
-
-    # \fracN4 -> \frac{N}{4}
     s = re.sub(r"\\frac([A-Za-z])([0-9])", r"\\frac{\1}{\2}", s)
-
     return s
 
 
@@ -96,6 +91,7 @@ def remove_outer_braces_once(s: str) -> str:
         return s
 
     bal = 0
+
     for i, ch in enumerate(s):
         if ch == "{":
             bal += 1
@@ -109,19 +105,20 @@ def remove_outer_braces_once(s: str) -> str:
 
 
 def remove_redundant_outer_braces(s: str) -> str:
-    prev = None
-    while prev != s:
+    for _ in range(5):
         prev = s
         s = remove_outer_braces_once(s)
+
+        if s == prev:
+            break
+
     return s
 
 
 def normalize_command_wrappers(s: str) -> str:
-    # {\pi}^{2} -> \pi^{2}
     s = re.sub(r"\{(\\[A-Za-z]+)\}\^", r"\1^", s)
     s = re.sub(r"\{(\\[A-Za-z]+)\}_", r"\1_", s)
 
-    # {x}^{2} -> x^{2}
     s = re.sub(r"\{([A-Za-z0-9])\}\^", r"\1^", s)
     s = re.sub(r"\{([A-Za-z0-9])\}_", r"\1_", s)
 
@@ -138,7 +135,6 @@ def normalize_bar_hat_groups(s: str) -> str:
 
 
 def normalize_frac_groups(s: str) -> str:
-    # {\frac{a}{b}} -> \frac{a}{b}
     s = re.sub(r"\{\\frac\{", r"\\frac{", s)
     return s
 
@@ -202,9 +198,9 @@ def canonicalize_latex(s: str) -> str:
     s = normalize_common_latex(s)
     s = normalize_punctuation(s)
 
-    prev = None
-    while prev != s:
+    for _ in range(5):
         prev = s
+
         s = remove_redundant_outer_braces(s)
         s = normalize_bar_hat_groups(s)
         s = normalize_frac_groups(s)
@@ -214,5 +210,8 @@ def canonicalize_latex(s: str) -> str:
         s = normalize_frac_shortcuts(s)
         s = normalize_common_latex(s)
         s = normalize_punctuation(s)
+
+        if s == prev:
+            break
 
     return s

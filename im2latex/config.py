@@ -7,21 +7,23 @@ from pathlib import Path
 
 ROOT_DIR = Path(".")
 
-DATASET_DIR = ROOT_DIR / "datasets" / "im2latex"
+DATASET_DIR = ROOT_DIR / "datasets" / "im2latex" / "final_all_mix_small"
 
 TRAIN_CSV = DATASET_DIR / "train.csv"
 VAL_CSV = DATASET_DIR / "val.csv"
 
-IMAGES_DIR = DATASET_DIR / "images" / "formula_images_processed"
+IMAGES_DIR = DATASET_DIR / "images"
 
-# v2: отдельная папка, чтобы не затереть сильный baseline
-CHECKPOINT_DIR = ROOT_DIR / "checkpoints" / "im2latex_v2_d384"
+CHECKPOINT_DIR = ROOT_DIR / "checkpoints" / "im2latex_final_all_small_scratch"
 
 TOKENIZER_PATH = CHECKPOINT_DIR / "tokenizer.json"
 
 LAST_CKPT = CHECKPOINT_DIR / "last.pt"
 BEST_CKPT = CHECKPOINT_DIR / "best.pt"
 BEST_EMA_CKPT = CHECKPOINT_DIR / "best_ema.pt"
+
+INFER_CKPT = CHECKPOINT_DIR / "current_bot_best.pt"
+INFER_TOKENIZER = TOKENIZER_PATH
 
 
 # =========================
@@ -37,7 +39,7 @@ MAX_WIDTH = 512
 # =========================
 
 VOCAB_MIN_FREQ = 2
-VOCAB_MAX_SIZE = 8000
+VOCAB_MAX_SIZE = 11000
 
 
 # =========================
@@ -62,7 +64,7 @@ FILTER_MAX_FORMULA_CHARS = 350
 USE_LENGTH_BUCKETING = True
 BUCKET_SIZE = 512
 
-NUM_EPOCHS = 25
+NUM_EPOCHS = 20
 
 LEARNING_RATE = 8e-5
 WEIGHT_DECAY = 1e-4
@@ -71,7 +73,6 @@ LABEL_SMOOTHING = 0.05
 
 SAVE_EVERY_STEPS = 500
 
-# effective batch = 2 * 2 = 4
 GRAD_ACCUM_STEPS = 2
 
 
@@ -89,8 +90,8 @@ EMA_DECAY = 0.999
 
 USE_SCHEDULED_SAMPLING = True
 SS_START_EPOCH = 8
-SS_MAX_PROB = 0.05
-SS_WARMUP_EPOCHS = 4
+SS_MAX_PROB = 0.015
+SS_WARMUP_EPOCHS = 5
 
 
 # =========================
