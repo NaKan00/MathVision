@@ -3,12 +3,6 @@ from torchvision import transforms
 
 
 def build_image_transform(height: int = 64, max_width: int = 384):
-    """
-    Resize with aspect ratio, no crop.
-    Output tensor always has fixed height=height.
-    Width is variable up to max_width.
-    """
-
     def resize_keep_aspect(img: Image.Image) -> Image.Image:
         img = img.convert("L")
 

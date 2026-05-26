@@ -52,7 +52,7 @@ def _read_left_right_delim(s: str, i: int) -> tuple[str | None, int]:
     if i >= len(s):
         return None, i
 
-    # delimiter can be a LaTeX command: \{, \langle, \Vert, ...
+   
     if s[i] == "\\":
         m = LATEX_CMD_RE.match(s, i)
         if m:
@@ -66,7 +66,7 @@ def _read_left_right_delim(s: str, i: int) -> tuple[str | None, int]:
             if delim in LEFT_RIGHT_DELIMS:
                 return delim, m.end()
 
-    # or a single char: (, ), [, ], ., |
+   
     delim = s[i]
     if delim in LEFT_RIGHT_DELIMS:
         return delim, i + 1
@@ -87,8 +87,7 @@ def latex_tokenize(s: str) -> List[str]:
             i += 1
             continue
 
-        # Special combined tokens:
-        # \left(, \right), \left\{, \right\rangle, etc.
+        
         if s.startswith(r"\left", i):
             j = i + len(r"\left")
             delim, end = _read_left_right_delim(s, j)
@@ -105,21 +104,21 @@ def latex_tokenize(s: str) -> List[str]:
                 i = end
                 continue
 
-        # LaTeX command: \frac, \alpha, \operatorname*
+       
         m = LATEX_CMD_RE.match(s, i)
         if m:
             tokens.append(m.group())
             i = m.end()
             continue
 
-        # Escaped char: \\, \_, \%, \&, \#, \$, \{, \}
+       
         m = ESCAPED_CHAR_RE.match(s, i)
         if m:
             tokens.append(m.group())
             i = m.end()
             continue
 
-        # Number token: 123, 12.5, 0.001
+        
         m = NUMBER_RE.match(s, i)
         if m:
             tokens.append(m.group())

@@ -50,8 +50,6 @@ class TransformerDecoder(nn.Module):
 
         self.norm = nn.LayerNorm(d_model)
 
-        # ВАЖНО: без weight tying.
-        # Tied weights тут давали огромный loss и ломали overfit-test.
         self.out = nn.Linear(
             d_model,
             vocab_size,
@@ -93,8 +91,6 @@ class TransformerDecoder(nn.Module):
         tgt_key_padding_mask = tgt_ids == self.pad_id
         tgt_mask = self.causal_mask(T, tgt.device)
 
-        # Encoder memory сейчас приходит как [S, B, D],
-        # а batch_first=True decoder ждёт [B, S, D].
         if memory.dim() == 3 and memory.shape[1] == B:
             memory = memory.transpose(0, 1)
 

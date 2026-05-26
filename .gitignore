@@ -3,15 +3,14 @@
 # =========================
 
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-
+*.py[cod]
+*$py.class
+*.so
 .python-version
 
 
 # =========================
-# Virtual envs
+# Virtual environments
 # =========================
 
 .venv/
@@ -20,34 +19,49 @@ env/
 
 
 # =========================
-# Environment variables
+# Environment variables / secrets
 # =========================
 
 .env
+.env.*
+!.env.example
 
 
 # =========================
-# PyTorch / checkpoints
+# PyTorch / model checkpoints
 # =========================
 
 checkpoints/
 *.pt
 *.pth
+*.ckpt
 
 
 # =========================
-# Datasets
+# Datasets and generated data
 # =========================
 
 datasets/
 
 
 # =========================
-# Logs
+# Generated analysis artifacts
+# =========================
+
+error_analysis.csv
+overfit_*.csv
+dataset_analysis/
+*.log
+
+
+# =========================
+# Logs / temp / cache
 # =========================
 
 logs/
-*.log
+tmp/
+.cache/
+.pytest_cache/
 
 
 # =========================
@@ -55,6 +69,13 @@ logs/
 # =========================
 
 tgBot/images/
+
+
+# =========================
+# Jupyter
+# =========================
+
+.ipynb_checkpoints/
 
 
 # =========================
@@ -70,10 +91,3 @@ tgBot/images/
 
 .idea/
 .vscode/
-
-
-# =========================
-# Jupyter
-# =========================
-
-.ipynb_checkpoints/
