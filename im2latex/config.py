@@ -7,14 +7,14 @@ from pathlib import Path
 
 ROOT_DIR = Path(".")
 
-DATASET_DIR = ROOT_DIR / "datasets" / "im2latex" / "final_all_mix_small"
+DATASET_DIR = ROOT_DIR / "datasets" / "im2latex" / "final_full_plus_school"
 
 TRAIN_CSV = DATASET_DIR / "train.csv"
 VAL_CSV = DATASET_DIR / "val.csv"
 
 IMAGES_DIR = DATASET_DIR / "images"
 
-CHECKPOINT_DIR = ROOT_DIR / "checkpoints" / "im2latex_final_all_small_scratch"
+CHECKPOINT_DIR = ROOT_DIR / "checkpoints" / "im2latex_full_plus_school_ft"
 
 TOKENIZER_PATH = CHECKPOINT_DIR / "tokenizer.json"
 
@@ -62,11 +62,11 @@ MAX_LEN = 320
 FILTER_MAX_FORMULA_CHARS = 350
 
 USE_LENGTH_BUCKETING = True
-BUCKET_SIZE = 512
+BUCKET_SIZE = 256
 
 NUM_EPOCHS = 20
 
-LEARNING_RATE = 8e-5
+LEARNING_RATE = 3e-5
 WEIGHT_DECAY = 1e-4
 
 LABEL_SMOOTHING = 0.05
@@ -88,10 +88,10 @@ EMA_DECAY = 0.999
 # Scheduled Sampling
 # =========================
 
-USE_SCHEDULED_SAMPLING = True
-SS_START_EPOCH = 8
-SS_MAX_PROB = 0.015
-SS_WARMUP_EPOCHS = 5
+USE_SCHEDULED_SAMPLING = False
+SS_START_EPOCH = 999
+SS_MAX_PROB = 0.0
+SS_WARMUP_EPOCHS = 1
 
 
 # =========================

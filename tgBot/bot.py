@@ -24,14 +24,14 @@ IMAGES_DIR.mkdir(exist_ok=True)
 CKPT_PATH = (
     PROJECT_DIR
     / "checkpoints"
-    / "im2latex_final_all_small_scratch"
+    / "im2latex_full_plus_school_ft"
     / "current_bot_best.pt"
 )
 
 TOKENIZER_PATH = (
     PROJECT_DIR
     / "checkpoints"
-    / "im2latex_final_all_small_scratch"
+    / "im2latex_full_plus_school_ft"
     / "tokenizer.json"
 )
 
@@ -87,7 +87,6 @@ async def handle_photo(message: types.Message, bot: Bot):
         return
 
     stdout = result.stdout.strip()
-
     latex = stdout
 
     for line in stdout.splitlines():
@@ -117,7 +116,6 @@ async def main():
     await bot.delete_webhook(drop_pending_updates=True)
 
     me = await bot.get_me()
-
     print(f"BOT STARTED: @{me.username} id={me.id}")
 
     await dp.start_polling(bot)
