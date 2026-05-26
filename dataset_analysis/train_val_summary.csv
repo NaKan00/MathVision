@@ -1,8 +1,0 @@
-,train,val
-rows,75275.0,8370.0
-formula_len_median,135.0,135.0
-formula_len_p95,299.0,300.0
-formula_len_max,584.0,497.0
-image_width_median,256.0,256.0
-image_width_p95,480.0,480.0
-image_width_max,480.0,480.0
