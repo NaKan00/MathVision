@@ -322,7 +322,7 @@ python run_infer.py \
 Example output:
 
 ```latex
-\frac{x^2+y^2}{z}
+\int_{0}^{1}x^{2}dx
 ```
 
 ---
